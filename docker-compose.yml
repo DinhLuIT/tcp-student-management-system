@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  # ==============================================================================
+  # DỊCH VỤ CƠ SỞ DỮ LIỆU SQL SERVER CHO MACBOOK (APPLE SILICON ARM64 & INTEL)
+  # ==============================================================================
+  sqlserver:
+    # mcr.microsoft.com/azure-sql-edge: Ảnh chuẩn của Microsoft hỗ trợ NATIVE ARM64 (M1/M2/M3/M4)
+    # Khởi động siêu nhanh, tiêu tốn ít RAM và tương thích 100% với T-SQL, JDBC và SSMS/DBeaver.
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    container_name: ptit-sqlserver
+    restart: unless-stopped
+    environment:
+      - ACCEPT_EULA=1
+      - MSSQL_SA_PASSWORD=Admin@123456
+      - MSSQL_PID=Developer
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+      - ./sql:/sql
+    networks:
+      - ptit-network
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/1433'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ==============================================================================
+  # SERVICE TỰ ĐỘNG CHẠY SCRIPT TẠO DATABASE VÀ BẢNG STUDENTS KÈM DỮ LIỆU MẪU
+  # ==============================================================================
+  sql-init:
+    image: mcr.microsoft.com/mssql-tools:latest
+    container_name: ptit-sql-init
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    volumes:
+      - ./sql:/sql
+    entrypoint: >
+      /bin/bash -c "
+        echo '>>> [DOCKER INIT] SQL Server da san sang, bat dau khoi tao CSDL...';
+        /opt/mssql-tools/bin/sqlcmd -S sqlserver -U sa -P 'Admin@123456' -i /sql/01_create_database_and_tables.sql;
+        /opt/mssql-tools/bin/sqlcmd -S sqlserver -U sa -P 'Admin@123456' -i /sql/02_sample_data.sql;
+        echo '>>> [DOCKER INIT] Hoan tat khoi tao Database va nap du lieu mau ma hoa DES!';
+      "
+    networks:
+      - ptit-network
+
+volumes:
+  sqlserver_data:
+    name: ptit_sqlserver_data
+
+networks:
+  ptit-network:
+    name: ptit_network
+    driver: bridge
