@@ -29,6 +29,12 @@ public final class FileParserUtil {
             while ((line = reader.readLine()) != null) {
                 lineNumber++;
                 line = line.trim();
+
+                // Lọc bỏ ký tự BOM UTF-8 (\uFEFF) nếu có ở đầu file (thường xuất hiện khi lưu file CSV từ Excel trên Windows)
+                if (line.startsWith("\uFEFF")) {
+                    line = line.substring(1).trim();
+                }
+
                 // Bỏ qua dòng trống hoặc comment
                 if (line.isEmpty() || line.startsWith("#")) {
                     continue;
@@ -48,18 +54,19 @@ public final class FileParserUtil {
                     continue; // Bỏ qua dòng không đủ 5 cột
                 }
 
-                String mssv = parts[0].trim();
-                String hoTen = parts[1].trim();
+                String mssv = stripQuotes(parts[0].trim());
+                String hoTen = stripQuotes(parts[1].trim());
 
                 // Bỏ qua dòng tiêu đề (header)
-                if (lineNumber == 1 && (mssv.equalsIgnoreCase("MSSV") || mssv.equalsIgnoreCase("studentId"))) {
+                if (lineNumber <= 2 && (mssv.equalsIgnoreCase("MSSV") || mssv.equalsIgnoreCase("studentId") 
+                        || mssv.equalsIgnoreCase("Mã SV") || mssv.equalsIgnoreCase("MaSinhVien"))) {
                     continue;
                 }
 
                 try {
-                    double toan = Double.parseDouble(parts[2].trim());
-                    double van = Double.parseDouble(parts[3].trim());
-                    double anh = Double.parseDouble(parts[4].trim());
+                    double toan = Double.parseDouble(stripQuotes(parts[2].trim()));
+                    double van = Double.parseDouble(stripQuotes(parts[3].trim()));
+                    double anh = Double.parseDouble(stripQuotes(parts[4].trim()));
 
                     if (toan < 0 || toan > 10 || van < 0 || van > 10 || anh < 0 || anh > 10) {
                         System.err.println("Cảnh báo dòng " + lineNumber + ": Điểm số nằm ngoài thang 0-10 (" + line + ")");
@@ -69,11 +76,18 @@ public final class FileParserUtil {
                     list.add(new StudentDTO(mssv, hoTen, toan, van, anh));
                 } catch (NumberFormatException e) {
                     // Nếu là dòng tiêu đề nhưng không nhận diện được ở trên
-                    if (lineNumber == 1) continue;
+                    if (lineNumber <= 2) continue;
                     System.err.println("Lỗi parse điểm số dòng " + lineNumber + ": " + e.getMessage());
                 }
             }
         }
         return list;
+    }
+
+    private static String stripQuotes(String s) {
+        if (s != null && s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) {
+            return s.substring(1, s.length() - 1).trim();
+        }
+        return s;
     }
 }
