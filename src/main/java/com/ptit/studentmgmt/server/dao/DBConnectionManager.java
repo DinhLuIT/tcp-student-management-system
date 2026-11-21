@@ -29,6 +29,11 @@ public final class DBConnectionManager {
         String user = config.getUsername() != null ? config.getUsername() : "sa";
         String pass = config.getPassword() != null ? config.getPassword() : "";
 
+        // Kiểm tra tính hợp lệ của dbName để chống SQL Injection
+        if (!dbName.matches("^[a-zA-Z0-9_]+$")) {
+            throw new SQLException("Tên Database không hợp lệ! Chỉ cho phép ký tự chữ, số và dấu gạch dưới.");
+        }
+
         // URL chuẩn hỗ trợ SSL Self-signed và timeout 5 giây
         String jdbcUrl = String.format(
                 "jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=true;trustServerCertificate=true;loginTimeout=5;",
