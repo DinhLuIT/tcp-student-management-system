@@ -121,6 +121,13 @@ public class ClientHandler implements Runnable {
             }
 
             StudentDTO student = JsonUtil.parseStudent(payload);
+            String valErr = validateStudent(student);
+            if (valErr != null) {
+                tcpServer.log("Dữ liệu sinh viên không hợp lệ từ " + clientAddress + ": " + valErr);
+                sendError(400, valErr);
+                return;
+            }
+
             tcpServer.log(String.format("Đang mã hóa DES và lưu sinh viên: %s - %s...", student.getStudentId(), student.getFullName()));
 
             studentDAO.saveStudent(student);
@@ -145,9 +152,28 @@ public class ClientHandler implements Runnable {
             }
 
             BatchStudentDTO batch = JsonUtil.parseBatchStudent(payload);
-            tcpServer.log(String.format("Bắt đầu xử lý file [%s] gồm %d sinh viên...", batch.getFileName(), batch.getTotalRecords()));
+            if (batch.getStudents() == null || batch.getStudents().isEmpty()) {
+                sendError(400, "Danh sách sinh viên trong file rỗng!");
+                return;
+            }
 
-            int savedCount = studentDAO.saveBatchStudents(batch.getStudents());
+            List<StudentDTO> validStudents = new java.util.ArrayList<>();
+            for (StudentDTO s : batch.getStudents()) {
+                if (validateStudent(s) == null) {
+                    validStudents.add(s);
+                } else {
+                    tcpServer.log("Bỏ qua bản ghi lỗi trong file từ " + clientAddress + ": " + s.getStudentId());
+                }
+            }
+
+            if (validStudents.isEmpty()) {
+                sendError(400, "Không có dòng sinh viên nào hợp lệ trong file!");
+                return;
+            }
+
+            tcpServer.log(String.format("Bắt đầu xử lý file [%s] gồm %d sinh viên hợp lệ...", batch.getFileName(), validStudents.size()));
+
+            int savedCount = studentDAO.saveBatchStudents(validStudents);
 
             tcpServer.log(String.format(">>> Đã mã hóa DES và lưu thành công %d/%d sinh viên từ file!", savedCount, batch.getTotalRecords()));
             ServerResponseDTO resp = ServerResponseDTO.ok(String.format("Đã nhập thành công %d sinh viên từ file!", savedCount));
@@ -159,6 +185,26 @@ public class ClientHandler implements Runnable {
             tcpServer.log("Lỗi xử lý file upload: " + e.getMessage());
             sendError(500, "Lỗi nhập dữ liệu từ file: " + e.getMessage());
         }
+    }
+
+    private String validateStudent(StudentDTO s) {
+        if (s == null) return "Dữ liệu sinh viên không được để rỗng!";
+        if (s.getStudentId() == null || s.getStudentId().trim().isEmpty()) {
+            return "Mã sinh viên không được để trống!";
+        }
+        if (s.getFullName() == null || s.getFullName().trim().isEmpty()) {
+            return "Họ và tên không được để trống!";
+        }
+        if (s.getMathScore() < 0.0 || s.getMathScore() > 10.0) {
+            return "Điểm Toán phải nằm trong thang điểm từ 0 đến 10!";
+        }
+        if (s.getLiteratureScore() < 0.0 || s.getLiteratureScore() > 10.0) {
+            return "Điểm Văn phải nằm trong thang điểm từ 0 đến 10!";
+        }
+        if (s.getEnglishScore() < 0.0 || s.getEnglishScore() > 10.0) {
+            return "Điểm Tiếng Anh phải nằm trong thang điểm từ 0 đến 10!";
+        }
+        return null;
     }
 
     public void handleCalcResults() throws IOException {
