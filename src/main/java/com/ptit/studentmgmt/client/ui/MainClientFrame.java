@@ -63,6 +63,10 @@ public class MainClientFrame extends JFrame {
     private JButton btnRefreshResults;
     private JLabel lblStatusMessage;
 
+    // Cơ chế tự động đồng bộ thời gian thực giữa các Client
+    private javax.swing.Timer autoSyncTimer;
+    private boolean isSyncing = false;
+
     public MainClientFrame() {
         this.tableModel = new StudentTableModel();
         initUI();
@@ -257,12 +261,74 @@ public class MainClientFrame extends JFrame {
             btnUploadFile.setEnabled(true);
             btnRefreshResults.setEnabled(true);
             lblStatusMessage.setText("Kết nối CSDL thành công! Bạn có thể nhập sinh viên hoặc đính kèm file mẫu.");
+            startAutoSync();
         } else {
             lblDbStatus.setText("● CSDL SQL Server: Chưa kết nối");
             lblDbStatus.setForeground(Color.RED);
             btnSendStudent.setEnabled(false);
             btnUploadFile.setEnabled(false);
             btnRefreshResults.setEnabled(false);
+            stopAutoSync();
+        }
+    }
+
+    private void startAutoSync() {
+        stopAutoSync();
+        autoSyncTimer = new javax.swing.Timer(3500, e -> {
+            if (btnRefreshResults.isEnabled() && btnSendStudent.isEnabled() && btnUploadFile.isEnabled() && !isSyncing) {
+                isSyncing = true;
+                new SwingWorker<List<StudentResultDTO>, Void>() {
+                    @Override
+                    protected List<StudentResultDTO> doInBackground() {
+                        try {
+                            synchronized (ClientSocketManager.getInstance()) {
+                                ClientSocketManager.getInstance().sendPacket(CommandCode.CMD_CALC_RESULTS_REQ, "{}");
+                                ProtocolPacket packet = ClientSocketManager.getInstance().readPacket();
+                                if (packet.getCommandCode() == CommandCode.CMD_CALC_RESULTS_RESP) {
+                                    return JsonUtil.parseStudentResults(packet.getPayload());
+                                }
+                            }
+                        } catch (Exception ignored) {}
+                        return null;
+                    }
+
+                    @Override
+                    protected void done() {
+                        try {
+                            List<StudentResultDTO> results = get();
+                            if (results != null) {
+                                boolean changed = (results.size() != tableModel.getRowCount());
+                                if (!changed) {
+                                    for (int i = 0; i < results.size(); i++) {
+                                        StudentResultDTO cur = tableModel.getStudentAt(i);
+                                        StudentResultDTO neu = results.get(i);
+                                        if (cur == null || !cur.getStudentId().equals(neu.getStudentId())
+                                                || cur.getAverageScore() != neu.getAverageScore()) {
+                                            changed = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (changed) {
+                                    tableModel.setStudents(results);
+                                    lblStatusMessage.setText("Đồng bộ thời gian thực: Cập nhật " + results.size() + " sinh viên từ Server.");
+                                }
+                            }
+                        } catch (Exception ignored) {
+                        } finally {
+                            isSyncing = false;
+                        }
+                    }
+                }.execute();
+            }
+        });
+        autoSyncTimer.start();
+    }
+
+    private void stopAutoSync() {
+        if (autoSyncTimer != null) {
+            autoSyncTimer.stop();
+            autoSyncTimer = null;
         }
     }
 
@@ -304,20 +370,22 @@ public class MainClientFrame extends JFrame {
             @Override
             protected Void doInBackground() throws Exception {
                 try {
-                    ClientSocketManager.getInstance().sendPacket(CommandCode.CMD_ADD_STUDENT_REQ, jsonPayload);
-                    // Đọc gói tin phản hồi lưu sinh viên
-                    ProtocolPacket respPacket = ClientSocketManager.getInstance().readPacket();
-                    ServerResponseDTO resp = JsonUtil.parseServerResponse(respPacket.getPayload());
-                    if (!resp.isSuccess()) {
-                        errorMsg = resp.getMessage();
-                        return null;
-                    }
+                    synchronized (ClientSocketManager.getInstance()) {
+                        ClientSocketManager.getInstance().sendPacket(CommandCode.CMD_ADD_STUDENT_REQ, jsonPayload);
+                        // Đọc gói tin phản hồi lưu sinh viên
+                        ProtocolPacket respPacket = ClientSocketManager.getInstance().readPacket();
+                        ServerResponseDTO resp = JsonUtil.parseServerResponse(respPacket.getPayload());
+                        if (!resp.isSuccess()) {
+                            errorMsg = resp.getMessage();
+                            return null;
+                        }
 
-                    // Đọc tiếp gói tin danh sách kết quả tính ĐTB mới nhất
-                    ProtocolPacket resultsPacket = ClientSocketManager.getInstance().readPacket();
-                    if (resultsPacket.getCommandCode() == CommandCode.CMD_CALC_RESULTS_RESP) {
-                        List<StudentResultDTO> results = JsonUtil.parseStudentResults(resultsPacket.getPayload());
-                        SwingUtilities.invokeLater(() -> tableModel.setStudents(results));
+                        // Đọc tiếp gói tin danh sách kết quả tính ĐTB mới nhất
+                        ProtocolPacket resultsPacket = ClientSocketManager.getInstance().readPacket();
+                        if (resultsPacket.getCommandCode() == CommandCode.CMD_CALC_RESULTS_RESP) {
+                            List<StudentResultDTO> results = JsonUtil.parseStudentResults(resultsPacket.getPayload());
+                            SwingUtilities.invokeLater(() -> tableModel.setStudents(results));
+                        }
                     }
                 } catch (Exception e) {
                     errorMsg = e.getMessage();
@@ -378,23 +446,25 @@ public class MainClientFrame extends JFrame {
                     BatchStudentDTO batch = new BatchStudentDTO(selectedFile.getName(), students);
                     String jsonPayload = JsonUtil.toJson(batch);
 
-                    ClientSocketManager.getInstance().sendPacket(CommandCode.CMD_UPLOAD_FILE_REQ, jsonPayload);
+                    synchronized (ClientSocketManager.getInstance()) {
+                        ClientSocketManager.getInstance().sendPacket(CommandCode.CMD_UPLOAD_FILE_REQ, jsonPayload);
 
-                    // Đọc phản hồi nhập batch
-                    ProtocolPacket respPacket = ClientSocketManager.getInstance().readPacket();
-                    ServerResponseDTO resp = JsonUtil.parseServerResponse(respPacket.getPayload());
-                    if (!resp.isSuccess()) {
-                        errorMsg = resp.getMessage();
-                        return null;
-                    }
+                        // Đọc phản hồi nhập batch
+                        ProtocolPacket respPacket = ClientSocketManager.getInstance().readPacket();
+                        ServerResponseDTO resp = JsonUtil.parseServerResponse(respPacket.getPayload());
+                        if (!resp.isSuccess()) {
+                            errorMsg = resp.getMessage();
+                            return null;
+                        }
 
-                    // Đọc tiếp kết quả danh sách sinh viên đã tính ĐTB
-                    ProtocolPacket resultsPacket = ClientSocketManager.getInstance().readPacket();
-                    if (resultsPacket.getCommandCode() == CommandCode.CMD_CALC_RESULTS_RESP) {
-                        List<StudentResultDTO> results = JsonUtil.parseStudentResults(resultsPacket.getPayload());
-                        SwingUtilities.invokeLater(() -> tableModel.setStudents(results));
+                        // Đọc tiếp kết quả danh sách sinh viên đã tính ĐTB
+                        ProtocolPacket resultsPacket = ClientSocketManager.getInstance().readPacket();
+                        if (resultsPacket.getCommandCode() == CommandCode.CMD_CALC_RESULTS_RESP) {
+                            List<StudentResultDTO> results = JsonUtil.parseStudentResults(resultsPacket.getPayload());
+                            SwingUtilities.invokeLater(() -> tableModel.setStudents(results));
+                        }
+                        return resp.getMessage();
                     }
-                    return resp.getMessage();
                 } catch (Exception e) {
                     errorMsg = e.getMessage();
                     return null;
@@ -425,13 +495,15 @@ public class MainClientFrame extends JFrame {
             @Override
             protected List<StudentResultDTO> doInBackground() throws Exception {
                 try {
-                    ClientSocketManager.getInstance().sendPacket(CommandCode.CMD_CALC_RESULTS_REQ, "{}");
-                    ProtocolPacket packet = ClientSocketManager.getInstance().readPacket();
-                    if (packet.getCommandCode() == CommandCode.CMD_CALC_RESULTS_RESP) {
-                        return JsonUtil.parseStudentResults(packet.getPayload());
-                    } else if (packet.getCommandCode() == CommandCode.CMD_ERROR) {
-                        ServerResponseDTO err = JsonUtil.parseServerResponse(packet.getPayload());
-                        errorMsg = err.getMessage();
+                    synchronized (ClientSocketManager.getInstance()) {
+                        ClientSocketManager.getInstance().sendPacket(CommandCode.CMD_CALC_RESULTS_REQ, "{}");
+                        ProtocolPacket packet = ClientSocketManager.getInstance().readPacket();
+                        if (packet.getCommandCode() == CommandCode.CMD_CALC_RESULTS_RESP) {
+                            return JsonUtil.parseStudentResults(packet.getPayload());
+                        } else if (packet.getCommandCode() == CommandCode.CMD_ERROR) {
+                            ServerResponseDTO err = JsonUtil.parseServerResponse(packet.getPayload());
+                            errorMsg = err.getMessage();
+                        }
                     }
                 } catch (Exception e) {
                     errorMsg = e.getMessage();
